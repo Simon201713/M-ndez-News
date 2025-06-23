@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Méndez News</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; scroll-behavior: smooth; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; }
+        ::-webkit-scrollbar-thumb { background: #38bdf8; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #0ea5e9; }
+        .loader {
+            border: 4px solid #f3f4f6;
+            border-top: 4px solid #38bdf8;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        #error-notification {
+            transition: transform 0.5s ease-in-out;
+            transform: translateY(-150%);
+        }
+        #error-notification.show { transform: translateY(0); }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200">
+
+    <div id="error-notification" class="fixed top-4 left-1/2 -translate-x-1/2 bg-red-600 text-white py-3 px-6 rounded-lg shadow-2xl z-50">
+        <p>🚨 <span id="error-message"></span></p>
+    </div>
+
+    <div class="container mx-auto p-4 md:p-8">
+        
+        <header class="text-center mb-10">
+            <h1 class="text-4xl md:text-5xl font-bold text-sky-400">Méndez News</h1>
+            <p class="text-gray-400 mt-2">Tu portal de noticias, clima y rutas de Argentina</p>
+            <div id="update-status-container" class="mt-4 text-sm text-sky-300 bg-gray-800/50 rounded-lg p-2 max-w-md mx-auto">
+                <p id="update-status"></p>
+                <p id="update-countdown" class="font-mono"></p>
+            </div>
+        </header>
+
+        <main class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div class="lg:col-span-2 space-y-10">
+                <section id="infobae-section">
+                    <h2 class="text-3xl font-semibold mb-5 border-b-2 border-sky-500 pb-2 flex items-center gap-3">
+                        <img src="https://www.infobae.com/favicon.ico" alt="Favicon de Infobae" class="w-7 h-7 rounded">
+                        Últimas Noticias de Infobae
+                    </h2>
+                    <div id="infobae-news" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6"></div>
+                </section>
+                <section id="ole-section">
+                    <h2 class="text-3xl font-semibold mb-5 border-b-2 border-sky-500 pb-2 flex items-center gap-3">
+                        <img src="https://www.ole.com.ar/favicon.ico" alt="Favicon de Olé" class="w-7 h-7 rounded">
+                        Noticias Deportivas de Olé
+                    </h2>
+                    <div id="ole-news" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6"></div>
+                </section>
+            </div>
+            <aside class="space-y-8 lg:sticky top-8 self-start">
+                <section id="weather-widget" class="bg-gray-800 p-6 rounded-xl shadow-lg min-h-[300px]"></section>
+                <section id="routes-widget" class="bg-gray-800 p-6 rounded-xl shadow-lg"></section>
+            </aside>
+        </main>
+        
+        <footer class="text-center mt-12 py-6 border-t border-gray-700">
+            <p class="text-gray-500">© 2024-2025 Méndez News. Todos los derechos reservados.</p>
+        </footer>
+
+    </div>
+
+    <script type="module">
+        // --- CONFIGURACIÓN Y CONSTANTES ---
+        const UPDATE_INTERVAL_MS = 5 * 60 * 1000;
+        const FETCH_TIMEOUT_MS = 60000;
+
+        const RSS_PROXY_URL = 'https://feedrapp.info?q=';
+        const INFOBAE_RSS_URL = `${RSS_PROXY_URL}https%3A%2F%2Fwww.infobae.com%2Frss%2Fultimas-noticias-america%2F`;
+        const OLE_RSS_URL = `${RSS_PROXY_URL}https%3A%2F%2Fwww.ole.com.ar%2Frss%2Fultimas-noticias%2F`;
+        const SMN_API_URL = 'https://ws.smn.gob.ar/map_items/weather';
+
+        const mockInfobaeNews = [ { link: 'https://www.infobae.com', thumbnail: 'https://placehold.co/600x400/1d4ed8/ffffff?text=Respaldo+Infobae', title: 'Noticias de respaldo de Infobae' } ];
+        const mockOleNews = [ { link: 'https://www.ole.com.ar', thumbnail: 'https://placehold.co/600x400/f59e0b/000000?text=Respaldo+Olé', title: 'Noticias de respaldo de Olé' } ];
+
+        const DOMElements = {
+            infobaeContainer: document.getElementById('infobae-news'),
+            oleContainer: document.getElementById('ole-news'),
+            weatherContainer: document.getElementById('weather-widget'),
+            routesContainer: document.getElementById('routes-widget'),
+            updateStatus: document.getElementById('update-status'),
+            countdown: document.getElementById('update-countdown'),
+            errorNotification: document.getElementById('error-notification'),
+            errorMessage: document.getElementById('error-message')
+        };
+        
+        // --- SISTEMA DE AUTOGESTIÓN DE ERRORES ---
+        
+        function showNotification(message) {
+            if (DOMElements.errorMessage) DOMElements.errorMessage.textContent = message;
+            if (DOMElements.errorNotification) DOMElements.errorNotification.classList.add('show');
+            setTimeout(() => {
+                if (DOMElements.errorNotification) DOMElements.errorNotification.classList.remove('show');
+            }, 5000);
+        }
+
+        window.addEventListener('error', (event) => {
+            console.error('Error global capturado:', event.error, event.message);
+            showNotification('Ocurrió un error inesperado. Intentando recuperar...');
+            softReset();
+        });
+
+        function softReset() {
+            console.warn("Iniciando reseteo suave de la aplicación...");
+            initializeAppState();
+        }
+
+        async function fetchWithTimeout(url, timeout = FETCH_TIMEOUT_MS) {
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), timeout);
+            const response = await fetch(url, { signal: controller.signal });
+            clearTimeout(id);
+            return response;
+        }
+
+        // --- LÓGICA DE LA APLICACIÓN ---
+
+        function displayNews(newsData, container, isFallback = false, sourceName = 'Noticia') {
+            if (!container) return;
+            let contentHTML = '';
+            if (isFallback) contentHTML += `<p class="text-yellow-400 text-center col-span-full mb-4">Servicio no disponible. Mostrando noticias de respaldo.</p>`;
+            newsData.forEach(item => {
+                const placeholderUrl = `https://placehold.co/600x400/374151/ffffff?text=${encodeURIComponent(sourceName)}`;
+                const errorPlaceholderUrl = `https://placehold.co/600x400/1f2937/ffffff?text=Sin+Imagen`;
+                const imageUrl = item.thumbnail || (item.content || item.description || '').match(/<img[^>]+src="([^">]+)"/)?.[1] || placeholderUrl;
+                contentHTML += `<a href="${item.link}" target="_blank" rel="noopener noreferrer" class="block bg-gray-800 rounded-lg overflow-hidden shadow-lg transform hover:-translate-y-1 transition-transform duration-300 group"><img src="${imageUrl}" alt="${item.title}" class="w-full h-40 object-cover" onerror="this.onerror=null;this.src='${errorPlaceholderUrl}';"><div class="p-4"><h3 class="text-md font-semibold text-gray-100 group-hover:text-sky-400 transition-colors duration-300">${item.title}</h3></div></a>`;
+            });
+            container.innerHTML = contentHTML;
+        }
+        
+        async function fetchNews(url, container, fallbackData, sourceName) {
+            if (!container) return;
+            container.innerHTML = `<div class="sm:col-span-2 xl:col-span-3 flex justify-center p-8"><div class="loader"></div></div>`;
+            try {
+                const response = await fetchWithTimeout(url);
+                if (!response.ok) throw new Error(`Error de red: ${response.status}`);
+                const data = await response.json();
+                const items = data.entries || data.items || data;
+                if (!Array.isArray(items)) throw new Error('Respuesta de API inválida.');
+                displayNews(items.slice(0, 6), container, false, sourceName);
+            } catch (error) {
+                let errorMessage = error.message;
+                if (error.name === 'AbortError') errorMessage = `La solicitud superó el tiempo de espera de ${FETCH_TIMEOUT_MS / 1000}s.`;
+                console.error(`Error al obtener noticias de ${sourceName}:`, errorMessage);
+                showNotification(`El servicio de ${sourceName} no responde. Usando datos de respaldo.`);
+                displayNews(fallbackData, container, true, sourceName);
+            }
+        }
+        
+        // --- LÓGICA DEL CLIMA CON FALLBACK ---
+
+        const normalizeString = (str) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+        
+        const getWeatherIcon = (code, source = 'smn') => {
+            if (source === 'smn') {
+                return ['☀️','☀️','🌥️','🌥️','☁️','☁️','🌫️','🌧️','🌧️','🌧️','🌨️','⛈️','⛈️'][code] || '❓';
+            } else { // Meteored (WMO Codes)
+                if (code === 0) return '☀️';
+                if (code >= 1 && code <= 3) return '🌥️';
+                if (code >= 45 && code <= 48) return '🌫️';
+                if (code >= 51 && code <= 67) return '🌧️';
+                if (code >= 71 && code <= 77) return '🌨️';
+                if (code >= 80 && code <= 82) return '🌦️';
+                if (code >= 85 && code <= 86) return '❄️';
+                if (code >= 95 && code <= 99) return '⛈️';
+                return '❓';
+            }
+        };
+
+        function displayWeatherUI(weatherData, source, searchError = '', isLoading = false) {
+            if (!DOMElements.weatherContainer) return;
+            let weatherContentHTML = '';
+            if (isLoading) {
+                 weatherContentHTML = `<div class="flex items-center justify-center h-full"><div class="loader"></div></div>`;
+            } else if (weatherData) {
+                weatherContentHTML = `<div class="text-center"><p class="text-lg text-gray-400">${weatherData.city}</p><p class="text-6xl font-bold my-2 text-sky-300">${weatherData.temperature}°C</p><p class="text-2xl">${weatherData.icon}</p><p class="text-xl text-gray-300">${weatherData.condition}</p></div><ul class="mt-6 space-y-2 text-sm"><li class="flex justify-between bg-gray-700 p-2 rounded-md"><span>Humedad</span> <strong>${weatherData.humidity}%</strong></li><li class="flex justify-between bg-gray-700 p-2 rounded-md"><span>Presión</span> <strong>${weatherData.pressure} hPa</strong></li></ul>`;
+            }
+            DOMElements.weatherContainer.innerHTML = `<h2 class="text-2xl font-semibold mb-4 border-b border-gray-600 pb-2">Clima</h2>${weatherContentHTML}<div class="mt-6 pt-4 border-t border-gray-700/50"><label for="city-search" class="block text-sm font-medium text-gray-300 mb-2">Buscar otra ciudad:</label><div class="flex gap-2"><input type="text" id="city-search" placeholder="Ej: Córdoba, Rosario..." class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-white focus:ring-2 focus:ring-sky-500 focus:outline-none"><button id="search-weather-btn" class="bg-sky-600 hover:bg-sky-700 text-white font-semibold px-4 py-2 rounded-md transition-colors">Buscar</button></div>${searchError ? `<p class="text-red-400 text-sm mt-2">${searchError}</p>` : ''}</div><p class="text-xs text-gray-500 mt-4 text-center">Fuente: ${source}.</p>`;
+            const searchBtn = document.getElementById('search-weather-btn');
+            const cityInput = document.getElementById('city-search');
+            if (searchBtn && cityInput) {
+                const performSearch = () => { if (cityInput.value.trim()) fetchWeatherData(cityInput.value.trim()); };
+                searchBtn.addEventListener('click', performSearch);
+                cityInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') performSearch(); });
+            }
+        }
+        
+        async function fetchWeatherData(cityName = 'Ramos Mejía') {
+            displayWeatherUI(null, '', true);
+            try {
+                // INTENTO 1: SMN (Fuente Primaria)
+                const smnResponse = await fetchWithTimeout(SMN_API_URL);
+                if (!smnResponse.ok) throw new Error('SMN no responde.');
+                const allSmnStations = await smnResponse.json();
+                const normalizedCity = normalizeString(cityName);
+                const smnStation = allSmnStations.find(s => normalizeString(s.name).includes(normalizedCity));
+                
+                if (smnStation) {
+                    const weatherData = {
+                        city: smnStation.name.charAt(0).toUpperCase() + smnStation.name.slice(1).toLowerCase(),
+                        temperature: smnStation.weather.temp, condition: smnStation.weather.description, humidity: smnStation.weather.humidity, pressure: smnStation.weather.pressure,
+                        icon: getWeatherIcon(smnStation.weather.id, 'smn')
+                    };
+                    displayWeatherUI(weatherData, 'Servicio Meteorológico Nacional');
+                    return;
+                }
+                throw new Error(`Ciudad no encontrada en SMN, intentando con Meteored.`);
+            } catch (smnError) {
+                console.warn(`Fallo al obtener datos del SMN: ${smnError.message}. Intentando con Meteored...`);
+                
+                // INTENTO 2: METEORED (Fuente de Respaldo)
+                try {
+                    const geocodeUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityName)}&count=1&language=es&format=json`;
+                    const geocodeResponse = await fetchWithTimeout(geocodeUrl);
+                    if (!geocodeResponse.ok) throw new Error('Servicio de geocodificación no responde.');
+                    const geocodeData = await geocodeResponse.json();
+                    if (!geocodeData.results?.[0]) {
+                        displayWeatherUI(null, `No se pudo encontrar la ciudad "${cityName}".`);
+                        return;
+                    }
+
+                    const { latitude, longitude, name } = geocodeData.results[0];
+                    const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,pressure_msl,weather_code&hourly=weather_code`;
+                    const weatherResponse = await fetchWithTimeout(weatherUrl);
+                    if (!weatherResponse.ok) throw new Error('Servicio de Meteored no responde.');
+                    const meteoData = await weatherResponse.json();
+
+                    const wmoDescriptions = { 0: 'Despejado', 1: 'Mayormente despejado', 2: 'Parcialmente nublado', 3: 'Nublado', 45: 'Niebla', 48: 'Niebla con escarcha', 51: 'Llovizna ligera', 53: 'Llovizna moderada', 55: 'Llovizna densa', 61: 'Lluvia ligera', 63: 'Lluvia moderada', 65: 'Lluvia fuerte', 80: 'Chubascos ligeros', 81: 'Chubascos moderados', 82: 'Chubascos violentos', 95: 'Tormenta' };
+                    
+                    const weatherData = {
+                        city: name,
+                        temperature: Math.round(meteoData.current.temperature_2m),
+                        condition: wmoDescriptions[meteoData.current.weather_code] || 'No disponible',
+                        humidity: meteoData.current.relative_humidity_2m,
+                        pressure: Math.round(meteoData.current.pressure_msl),
+                        icon: getWeatherIcon(meteoData.current.weather_code, 'meteored')
+                    };
+                    displayWeatherUI(weatherData, 'Meteored');
+                } catch (meteoError) {
+                     console.error("Error al obtener datos de Meteored:", meteoError.message);
+                     showNotification("Los servicios de clima no responden.");
+                     displayWeatherUI(null, "Ambos servicios de clima fallaron. Intente más tarde.");
+                }
+            }
+        }
+
+        function displayRoutesData() {
+            if (!DOMElements.routesContainer) return;
+            const routes = [{ name: 'Acceso Oeste', url: 'https://www.google.com/maps/@-34.643,-58.570,14z/data=!5m1!1e1' }, { name: 'Av. General Paz', url: 'https://www.google.com/maps/@-34.645,-58.530,14z/data=!5m1!1e1' }, { name: 'Ruta 3 (La Matanza)', url: 'https://www.google.com/maps/@-34.675,-58.565,14z/data=!5m1!1e1' }, { name: 'Autopista Riccheri', url: 'https://www.google.com/maps/@-34.690,-58.515,14z/data=!5m1!1e1' }];
+            DOMElements.routesContainer.innerHTML = `<h2 class="text-2xl font-semibold mb-4 border-b border-gray-600 pb-2">Tráfico en Vivo</h2><ul class="space-y-3">${routes.map(r => `<li><a href="${r.url}" target="_blank" rel="noopener noreferrer" class="flex justify-between items-center bg-gray-700 hover:bg-gray-600 p-3 rounded-md transition-colors"><span class="font-medium">${r.name}</span><span class="flex items-center text-sm text-sky-400 font-semibold">Ver en Maps<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ml-2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></span></a></li>`).join('')}</ul><p class="text-xs text-gray-500 mt-4 text-center">Se abrirá Google Maps con datos de tráfico.</p>`;
+        }
+        
+        function updateAllNewsAndWeather() {
+            fetchNews(INFOBAE_RSS_URL, DOMElements.infobaeContainer, mockInfobaeNews, 'Infobae');
+            fetchNews(OLE_RSS_URL, DOMElements.oleContainer, mockOleNews, 'Olé');
+            fetchWeatherData();
+        }
+
+        function startCountdown() {
+            let timeLeft = UPDATE_INTERVAL_MS / 1000;
+            const timer = () => {
+                const minutes = Math.floor(timeLeft / 60);
+                const seconds = timeLeft % 60;
+                if (DOMElements.countdown) DOMElements.countdown.textContent = `Próxima actualización en: ${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+                timeLeft--;
+                if (timeLeft < 0) timeLeft = (UPDATE_INTERVAL_MS / 1000) - 1;
+            };
+            timer();
+            if(!window.appCountdownInterval) window.appCountdownInterval = setInterval(timer, 1000);
+        }
+
+        function initializeAppState() {
+            displayRoutesData();
+            if(DOMElements.updateStatus) DOMElements.updateStatus.textContent = 'Modo en vivo: Actualizando cada 5 minutos.';
+            updateAllNewsAndWeather();
+            if(window.appUpdateInterval) clearInterval(window.appUpdateInterval);
+            window.appUpdateInterval = setInterval(updateAllNewsAndWeather, UPDATE_INTERVAL_MS);
+            if(!window.appCountdownInterval) startCountdown();
+        }
+        
+        document.addEventListener('DOMContentLoaded', initializeAppState);
+    </script>
+</body>
+</html>
